@@ -21,9 +21,6 @@ st.set_page_config(
 st.title("📈 RS Screener")
 st.caption("セクター・テーマETFの相対強度（vs QQQ）")
 
-# ============================================================
-#  設定
-# ============================================================
 BENCHMARK     = 'QQQ'
 RS_PERIODS    = [4, 13, 26, 52]
 TOP_N         = 5
@@ -84,9 +81,6 @@ THEME_ETFS = {
 
 ALL_ETFS = {**SECTOR_ETFS, **THEME_ETFS}
 
-# ============================================================
-#  データ取得（キャッシュで高速化）
-# ============================================================
 @st.cache_data(ttl=3600)
 def load_data():
     bm_raw = yf.download(BENCHMARK, period='3y', interval='1wk',
@@ -104,9 +98,6 @@ def load_data():
 
     return bm_close, close_all
 
-# ============================================================
-#  RS計算
-# ============================================================
 def calc_rs_row(sym, name, category, bm_close, close_all):
     try:
         if sym not in close_all.columns:
@@ -149,13 +140,10 @@ def calc_rs_series(sym, bm_close, close_all, weeks=HISTORY_WEEKS):
     except:
         return None
 
-# ============================================================
-#  グラフ描画
-# ============================================================
 def draw_chart(etf_dict, category_label, df_cat, bm_close, close_all):
-    top   = df_cat.nlargest(TOP_N, '総合RS')
-    syms  = top['シンボル'].tolist()
-    names = [etf_dict.get(s, s) for s in syms]
+    top     = df_cat.nlargest(TOP_N, '総合RS')
+    syms    = top['シンボル'].tolist()
+    names   = [etf_dict.get(s, s) for s in syms]
     palette = ['#00ff88','#ff6b6b','#4ecdc4','#ffd93d','#a29bfe']
 
     fig = plt.figure(figsize=(12, 9), facecolor='#0d1117')
@@ -224,9 +212,6 @@ def draw_chart(etf_dict, category_label, df_cat, bm_close, close_all):
     plt.tight_layout()
     return fig
 
-# ============================================================
-#  メイン画面
-# ============================================================
 if st.button('🔄 データを更新', type='primary', use_container_width=True):
     st.cache_data.clear()
 
@@ -258,14 +243,13 @@ def color_rs(val):
         else: return 'background-color:#5c0000;color:white'
     return ''
 
-# タブで切り替え
 tab1, tab2 = st.tabs(['📊 セクター', '🎯 テーマ'])
 
 with tab1:
     st.subheader(f'📊 セクター RS ランキング（vs {BENCHMARK}）')
     st.dataframe(
         df_sector[cols].style
-        .applymap(color_rs, subset=rs_cols)
+        .map(color_rs, subset=rs_cols)
         .format({c: '{:.3f}' for c in rs_cols} | {'52週高値比%': '{:.1f}%'}),
         use_container_width=True, height=420
     )
@@ -276,7 +260,7 @@ with tab2:
     st.subheader(f'🎯 テーマ RS ランキング（vs {BENCHMARK}）')
     st.dataframe(
         df_theme[cols].style
-        .applymap(color_rs, subset=rs_cols)
+        .map(color_rs, subset=rs_cols)
         .format({c: '{:.3f}' for c in rs_cols} | {'52週高値比%': '{:.1f}%'}),
         use_container_width=True, height=420
     )
