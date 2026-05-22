@@ -12,12 +12,7 @@ try:
 except:
     pass
 
-st.set_page_config(
-    page_title="RS Screener",
-    page_icon="📈",
-    layout="wide"
-)
-
+st.set_page_config(page_title="RS Screener", page_icon="📈", layout="wide")
 st.title("📈 RS Screener")
 st.caption("セクター・テーマETFの相対強度（vs QQQ）")
 
@@ -27,56 +22,25 @@ TOP_N         = 5
 HISTORY_WEEKS = 26
 
 SECTOR_ETFS = {
-    'XLK'  : 'テクノロジー',
-    'XLV'  : 'ヘルスケア',
-    'XLF'  : '金融',
-    'XLY'  : '一般消費財',
-    'XLC'  : 'コミュニケーション',
-    'XLI'  : '資本財',
-    'XLP'  : '生活必需品',
-    'XLE'  : 'エネルギー',
-    'XLU'  : '公益事業',
-    'XLRE' : '不動産',
-    'XLB'  : '素材',
+    'XLK':'テクノロジー','XLV':'ヘルスケア','XLF':'金融',
+    'XLY':'一般消費財','XLC':'コミュニケーション','XLI':'資本財',
+    'XLP':'生活必需品','XLE':'エネルギー','XLU':'公益事業',
+    'XLRE':'不動産','XLB':'素材',
 }
 
 THEME_ETFS = {
-    'SMH'  : '半導体',
-    'SOXX' : '半導体(iShares)',
-    'ARKK' : 'ARKイノベーション',
-    'ARKG' : 'ARKゲノム',
-    'ARKW' : 'ARK次世代インターネット',
-    'BOTZ' : 'AI・ロボット',
-    'AIQ'  : 'AI全般',
-    'ROBO' : 'ロボティクス',
-    'WCLD' : 'クラウド',
-    'CLOU' : 'クラウドコンピューティング',
-    'CIBR' : 'サイバーセキュリティ',
-    'HACK' : 'サイバーセキュリティ2',
-    'FINX' : 'フィンテック',
-    'IPAY' : 'デジタル決済',
-    'ICLN' : 'クリーンエネルギー',
-    'QCLN' : 'クリーンエネルギー2',
-    'LIT'  : 'リチウム・EV',
-    'DRIV' : '自動運転・EV',
-    'KARS' : 'EV全般',
-    'IBB'  : 'バイオテク',
-    'XBI'  : 'バイオテク2',
-    'GLD'  : '金(ゴールド)',
-    'SLV'  : '銀',
-    'GDX'  : '金鉱株',
-    'USO'  : '原油',
-    'DBA'  : '農産物',
-    'JETS' : '航空',
-    'ITB'  : '住宅建設',
-    'XHB'  : 'ホームビルダー',
-    'XRT'  : '小売',
-    'HERO' : 'ゲーム・eスポーツ',
-    'ESPO' : 'ゲーム2',
-    'METV' : 'メタバース',
-    'UFO'  : '宇宙',
-    'BETZ' : 'スポーツ賭博',
-    'MJ'   : '大麻',
+    'SMH':'半導体','SOXX':'半導体(iShares)','ARKK':'ARKイノベーション',
+    'ARKG':'ARKゲノム','ARKW':'ARK次世代インターネット','BOTZ':'AI・ロボット',
+    'AIQ':'AI全般','ROBO':'ロボティクス','WCLD':'クラウド',
+    'CLOU':'クラウドコンピューティング','CIBR':'サイバーセキュリティ',
+    'HACK':'サイバーセキュリティ2','FINX':'フィンテック','IPAY':'デジタル決済',
+    'ICLN':'クリーンエネルギー','QCLN':'クリーンエネルギー2',
+    'LIT':'リチウム・EV','DRIV':'自動運転・EV','KARS':'EV全般',
+    'IBB':'バイオテク','XBI':'バイオテク2','GLD':'金(ゴールド)',
+    'SLV':'銀','GDX':'金鉱株','USO':'原油','DBA':'農産物',
+    'JETS':'航空','ITB':'住宅建設','XHB':'ホームビルダー','XRT':'小売',
+    'HERO':'ゲーム・eスポーツ','ESPO':'ゲーム2','METV':'メタバース',
+    'UFO':'宇宙','BETZ':'スポーツ賭博','MJ':'大麻',
 }
 
 ALL_ETFS = {**SECTOR_ETFS, **THEME_ETFS}
@@ -89,12 +53,13 @@ def load_data():
         bm_raw.columns = bm_raw.columns.get_level_values(0)
     bm_close = bm_raw['Close'].astype(float).dropna()
 
-    raw_all = yf.download(list(ALL_ETFS.keys()), period='3y', interval='1wk',
+    symbols = list(ALL_ETFS.keys())
+    raw_all = yf.download(symbols, period='3y', interval='1wk',
                           progress=False, auto_adjust=True)
     if isinstance(raw_all.columns, pd.MultiIndex):
         close_all = raw_all['Close'].astype(float)
     else:
-        close_all = raw_all[['Close']].astype(float)
+        close_all = raw_all.astype(float)
 
     return bm_close, close_all
 
@@ -182,7 +147,7 @@ def draw_chart(etf_dict, category_label, df_cat, bm_close, close_all):
                labelcolor='white', framealpha=0.85, edgecolor='#333333')
     plt.setp(ax1.get_xticklabels(), rotation=30)
 
-    ax2.set_title('勢い（週次RS変化）  ＋ = 加速  − = 減速',
+    ax2.set_title('勢い（週次RS変化）  ＋=加速  −=減速',
                   color='#aaaaaa', fontsize=10, pad=8)
     ax2.axhline(0, color='#555555', linewidth=1.0)
 
@@ -226,7 +191,12 @@ for sym, name in THEME_ETFS.items():
     r = calc_rs_row(sym, name, 'テーマ', bm_close, close_all)
     if r: results.append(r)
 
-df_rs     = pd.DataFrame(results)
+df_rs = pd.DataFrame(results)
+
+if 'カテゴリ' not in df_rs.columns:
+    st.error('データ取得に失敗しました。データを更新ボタンを押してください。')
+    st.stop()
+
 df_sector = df_rs[df_rs['カテゴリ']=='セクター'].sort_values('総合RS', ascending=False).reset_index(drop=True)
 df_theme  = df_rs[df_rs['カテゴリ']=='テーマ'].sort_values('総合RS', ascending=False).reset_index(drop=True)
 df_sector.index += 1
