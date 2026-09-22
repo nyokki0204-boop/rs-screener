@@ -1,393 +1,118 @@
+import pandas as pd
+import plotly.graph_objects as go
 import streamlit as st
 import yfinance as yf
-import pandas as pd
-import matplotlib.pyplot as plt
-import matplotlib.gridspec as gridspec
-import numpy as np
-import warnings
-import os
-import datetime
-warnings.filterwarnings('ignore')
+from metrics import PERIODS, NEUTRAL, weekly_prices, calculate, state
+from universe import SECTOR_ETFS, THEME_ETFS
 
-try:
-    import japanize_matplotlib
-except:
-    pass
-
-st.set_page_config(page_title="RS Screener", page_icon="📈", layout="wide")
-st.title("📈 RS Screener")
-st.caption("セクター・テーマETFの相対強度（vs QQQ）")
-
-BENCHMARK     = 'QQQ'
-RS_PERIODS    = [4, 13, 26, 52]
-TOP_N         = 5
-HISTORY_WEEKS = 26
-HISTORY_PATH  = 'data/rs_history.csv'
-
-SECTOR_ETFS = {
-    'XLK':'テクノロジー','XLV':'ヘルスケア','XLF':'金融',
-    'XLY':'一般消費財','XLC':'コミュニケーション','XLI':'資本財',
-    'XLP':'生活必需品','XLE':'エネルギー','XLU':'公益事業',
-    'XLRE':'不動産','XLB':'素材',
-}
-
-THEME_ETFS = {
-    'SMH':'半導体','SOXX':'半導体(iShares)','ARKK':'ARKイノベーション',
-    'ARKG':'ARKゲノム','ARKW':'ARK次世代インターネット','BOTZ':'AI・ロボット',
-    'AIQ':'AI全般','ROBO':'ロボティクス','WCLD':'クラウド',
-    'CLOU':'クラウドコンピューティング','CIBR':'サイバーセキュリティ',
-    'HACK':'サイバーセキュリティ2','FINX':'フィンテック','IPAY':'デジタル決済',
-    'ICLN':'クリーンエネルギー','QCLN':'クリーンエネルギー2','LIT':'リチウム・EV',
-    'DRIV':'自動運転・EV','KARS':'EV全般','IBB':'バイオテク','XBI':'バイオテク2',
-    'GLD':'金(ゴールド)','SLV':'銀','GDX':'金鉱株','USO':'原油','DBA':'農産物',
-    'JETS':'航空','ITB':'住宅建設','XHB':'ホームビルダー','XRT':'小売',
-    'HERO':'ゲーム・eスポーツ','ESPO':'ゲーム2','METV':'メタバース',
-    'UFO':'宇宙','BETZ':'スポーツ賭博','MJ':'大麻',
-}
-
-ALL_ETFS = {**SECTOR_ETFS, **THEME_ETFS}
+st.set_page_config(page_title='セクターの流れ | RS Screener', page_icon='🌊', layout='wide')
+st.markdown('''<style>.block-container{max-width:1250px;padding-top:2rem}h1{letter-spacing:-.04em} [data-testid="stMetric"]{background:rgba(120,140,160,.08);padding:16px;border-radius:12px}</style>''', unsafe_allow_html=True)
+st.title('セクターの流れ')
+st.caption('強さの位置と変化から、相場の移り変わりを読む')
+ALL = {**SECTOR_ETFS, **THEME_ETFS}
+COMMODITIES = {'GLD', 'SLV', 'USO', 'DBA'}
+COLORS = ['#38bdf8','#a78bfa','#34d399','#fbbf24','#fb7185','#22d3ee','#f472b6','#a3e635','#fb923c','#818cf8','#94a3b8']
+label = lambda s: f'{ALL.get(s,s)}（{s}）'
 
 @st.cache_data(ttl=3600)
 def load_data():
-    bm_raw = yf.download(BENCHMARK, period='3y', interval='1wk',
-                         progress=False, auto_adjust=True)
-    if isinstance(bm_raw.columns, pd.MultiIndex):
-        bm_raw.columns = bm_raw.columns.get_level_values(0)
-    bm_close = bm_raw['Close'].astype(float).dropna()
-    raw_all = yf.download(list(ALL_ETFS.keys()), period='3y', interval='1wk',
-                          progress=False, auto_adjust=True)
-    if isinstance(raw_all.columns, pd.MultiIndex):
-        close_all = raw_all['Close'].astype(float)
-    else:
-        close_all = raw_all[['Close']].astype(float)
-    return bm_close, close_all
+    raw = yf.download(list(ALL)+['QQQ'], period='3y', interval='1d', auto_adjust=True, progress=False)
+    if raw.empty:
+        raise ValueError('データを取得できませんでした。時間を置いて更新してください。')
+    close = raw['Close']
+    return close.reindex(columns=list(ALL)+['QQQ']), pd.Timestamp.now(tz='UTC')
 
-def calc_rs_row(sym, name, category, bm_close, close_all):
-    try:
-        if sym not in close_all.columns:
-            return None
-        ec     = close_all[sym].dropna()
-        bc     = bm_close.reindex(ec.index, method='ffill').dropna()
-        common = ec.index.intersection(bc.index)
-        if len(common) < 53:
-            return None
-        ec = ec[common]
-        bc = bc[common]
-        row = {'シンボル': sym, '名称': name, 'カテゴリ': category}
-        for p in RS_PERIODS:
-            if len(common) >= p + 1:
-                rs = (ec.iloc[-1] / ec.iloc[-p-1]) / (bc.iloc[-1] / bc.iloc[-p-1])
-                row[f'RS_{p}週'] = round(float(rs), 3)
-            else:
-                row[f'RS_{p}週'] = None
-        rs_vals = [row[f'RS_{p}週'] for p in RS_PERIODS if row[f'RS_{p}週'] is not None]
-        row['総合RS'] = round(sum(rs_vals) / len(rs_vals), 3) if rs_vals else None
-        row['現在値'] = round(float(ec.iloc[-1]), 2)
-        row['52週高値比%'] = round((ec.iloc[-1] - ec.iloc[-52:].max()) / ec.iloc[-52:].max() * 100, 1)
-        return row
-    except:
-        return None
+c1,c2 = st.columns([3,1])
+with c1:
+    provisional = st.toggle('今週途中の動きも見る（暫定）', value=False)
+with c2:
+    if st.button('データを更新', use_container_width=True):
+        load_data.clear()
+try:
+    with st.spinner('価格データを取得しています…'):
+        daily, fetched = load_data()
+        weekly, price_date, partial = weekly_prices(daily, provisional=provisional)
+        periods, score, changes = calculate(weekly)
+    if weekly['QQQ'].iloc[-1:].isna().any() or score.iloc[-1].dropna().empty:
+        raise ValueError('基準日のデータが不足しています。データを更新してください。')
+except Exception as exc:
+    st.error(f'表示できません：{exc}')
+    st.stop()
 
-def calc_rs_series(sym, bm_close, close_all, weeks=HISTORY_WEEKS):
-    try:
-        if sym not in close_all.columns:
-            return None
-        ec     = close_all[sym].dropna()
-        bc     = bm_close.reindex(ec.index, method='ffill').dropna()
-        common = ec.index.intersection(bc.index)
-        if len(common) < weeks + 5:
-            return None
-        ec = ec[common].iloc[-weeks-1:]
-        bc = bc[common].iloc[-weeks-1:]
-        rs = (ec / ec.iloc[0]) / (bc / bc.iloc[0])
-        return rs.iloc[1:]
-    except:
-        return None
+st.caption(f'比較基準：QQQ ｜ 価格基準日：{price_date:%Y/%m/%d} ｜ {"今週は暫定（日足終値まで）" if partial else "確定週足"} ｜ 取得：{fetched.tz_convert("Asia/Tokyo"):%m/%d %H:%M} 日本時間')
+missing = [s for s in ALL if pd.isna(score[s].iloc[-1])]
+if missing:
+    st.warning(f'計算可能 {len(ALL)-len(missing)}/{len(ALL)}本。欠損・履歴不足：'+ '、'.join(map(label,missing)))
 
-def save_history(df_rs):
-    today = datetime.date.today().strftime('%Y-%m-%d')
-    os.makedirs('data', exist_ok=True)
-    rows = []
-    for _, row in df_rs.iterrows():
-        rows.append({
-            'date'    : today,
-            'symbol'  : row['シンボル'],
-            'name'    : row['名称'],
-            'category': row['カテゴリ'],
-            'rs_total': row['総合RS'],
-            'rs_4w'   : row['RS_4週'],
-            'rs_13w'  : row['RS_13週'],
-            'rs_26w'  : row['RS_26週'],
-            'rs_52w'  : row['RS_52週'],
-        })
-    new_df = pd.DataFrame(rows)
-    if os.path.exists(HISTORY_PATH):
-        hist = pd.read_csv(HISTORY_PATH)
-        hist = hist[hist['date'] != today]
-        hist = pd.concat([hist, new_df], ignore_index=True)
-    else:
-        hist = new_df
-    hist.to_csv(HISTORY_PATH, index=False)
 
-def draw_chart(etf_dict, category_label, df_cat, bm_close, close_all):
-    top     = df_cat.nlargest(TOP_N, '総合RS')
-    syms    = top['シンボル'].tolist()
-    names   = [etf_dict.get(s, s) for s in syms]
-    palette = ['#00ff88','#ff6b6b','#4ecdc4','#ffd93d','#a29bfe']
-    fig = plt.figure(figsize=(12, 9), facecolor='#0d1117')
-    gs  = gridspec.GridSpec(2, 1, hspace=0.45)
-    ax1 = fig.add_subplot(gs[0])
-    ax2 = fig.add_subplot(gs[1])
-    for ax in [ax1, ax2]:
-        ax.set_facecolor('#0d1117')
-        ax.tick_params(colors='#aaaaaa', labelsize=9)
-        ax.grid(True, alpha=0.12, color='#444444')
-        for spine in ax.spines.values():
-            spine.set_color('#2a2a2a')
-    ax1.set_title(f'{category_label} RS推移 上位{TOP_N}本（vs {BENCHMARK}）',
-                  color='white', fontsize=11, fontweight='bold', pad=10)
-    ax1.axhline(1.0, color='#555555', linewidth=1.0, linestyle='--')
-    bar_data = []
-    for i, (sym, name, color) in enumerate(zip(syms, names, palette)):
-        rs = calc_rs_series(sym, bm_close, close_all)
-        if rs is None:
-            continue
-        ax1.plot(rs.index, rs.values, color=color, linewidth=2.2, label=f'{sym} {name}')
-        ax1.annotate(f'{rs.iloc[-1]:.2f}', xy=(rs.index[-1], rs.iloc[-1]),
-                     xytext=(6, 0), textcoords='offset points',
-                     color=color, fontsize=9, fontweight='bold')
-        ax1.plot(rs.index[-4:], rs.values[-4:], color=color, linewidth=4.0, alpha=0.5)
-        bar_data.append((sym, name, color, rs.diff().iloc[-8:]))
-    ax1.set_ylabel('RS値', color='#aaaaaa', fontsize=10)
-    ax1.legend(loc='upper left', fontsize=8, facecolor='#1a1a1a',
-               labelcolor='white', framealpha=0.85, edgecolor='#333333')
-    plt.setp(ax1.get_xticklabels(), rotation=30)
-    ax2.set_title('勢い（週次RS変化）  ＋=加速  −=減速', color='#aaaaaa', fontsize=10, pad=8)
-    ax2.axhline(0, color='#555555', linewidth=1.0)
-    if bar_data:
-        n_bars = len(bar_data[0][3])
-        x      = np.arange(n_bars)
-        width  = 0.15
-        offset = -(len(bar_data)-1) / 2 * width
-        for j, (sym, name, color, changes) in enumerate(bar_data):
-            bars = ax2.bar(x + offset + j * width, changes.values,
-                           width, color=color, alpha=0.8, label=sym)
-            bars[-1].set_alpha(1.0)
-            bars[-1].set_edgecolor('white')
-            bars[-1].set_linewidth(1.0)
-        dates = [d.strftime('%m/%d') for d in bar_data[0][3].index]
-        ax2.set_xticks(x)
-        ax2.set_xticklabels(dates, rotation=30, color='#aaaaaa', fontsize=9)
-        ax2.set_ylabel('RS週次変化', color='#aaaaaa', fontsize=10)
-        ax2.legend(loc='upper left', fontsize=8, facecolor='#1a1a1a',
-                   labelcolor='white', framealpha=0.85, edgecolor='#333333',
-                   ncol=len(bar_data))
-        ymin, ymax = ax2.get_ylim()
-        ax2.axhspan(0, max(ymax, 0.01), alpha=0.05, color='#00ff88')
-        ax2.axhspan(min(ymin, -0.01), 0, alpha=0.05, color='#ff6b6b')
-    plt.tight_layout()
-    return fig
+def render(symbols, key):
+    available = [s for s in symbols if pd.notna(score[s].iloc[-1])]
+    if not available:
+        st.info('この分類のデータが不足しています。'); return
+    latest = score[available].iloc[-1]
+    delta = changes[available].iloc[-1]
+    st.subheader('今週の変化' if not partial else '今週の変化 · 暫定')
+    st.caption('総合RSの前週差。順位の上昇とは別に、数値自体の改善・悪化を表示します。')
+    groups = [('↗ 強くなっている',delta[delta>NEUTRAL].sort_values(ascending=False)), ('→ 強さを維持',delta[(delta.abs()<=NEUTRAL)&(latest>=1)]), ('↘ 弱くなっている',delta[delta < -NEUTRAL].sort_values())]
+    for col,(title,vals) in zip(st.columns(3),groups):
+        with col:
+            with st.container(border=True):
+                st.markdown('**'+title+'**')
+                if vals.empty: st.caption('該当なし')
+                for sym,val in vals.head(3).items():
+                    st.markdown(f'**{label(sym)}**')
+                    st.caption(f'{state(latest[sym],val)} · {val:+.2f} pt')
+    st.subheader('強弱マップ')
+    st.caption('右ほどQQQに対して強く、上ほど前週から改善。線は直近6週、◆が最新。四象限を順番に回るとは限りません。')
+    selected = st.multiselect('比較するセクター・テーマ', available, default=available if key=='sector' else latest.nlargest(5).index.tolist(), format_func=label, key='select_'+key)
+    fig = go.Figure()
+    for i,sym in enumerate(selected):
+        x=(score[sym].tail(6)-1)*100; y=changes[sym].tail(6)
+        fig.add_trace(go.Scatter(x=x,y=y,mode='lines+markers',name=label(sym),connectgaps=False,line=dict(color=COLORS[i%len(COLORS)],width=2),marker=dict(size=[5]*5+[12] if len(x)==6 else 8,symbol=['circle']*(len(x)-1)+['diamond']),customdata=x.index.strftime('%Y/%m/%d'),hovertemplate=label(sym)+'<br>週ラベル %{customdata}<br>相対強度 %{x:.2f} pt<br>前週差 %{y:.2f} pt<extra></extra>'))
+    fig.add_hline(y=0,line_color='#94a3b8',line_dash='dot'); fig.add_vline(x=0,line_color='#94a3b8',line_dash='dot')
+    for x,y,t in [(0,1,'弱いが改善'),(1,1,'強く、改善'),(0,0,'弱く、悪化'),(1,0,'強いが悪化')]:
+        fig.add_annotation(x=x,y=y,xref='paper',yref='paper',text=t,showarrow=False,xanchor='left' if x==0 else 'right',font=dict(color='#94a3b8'))
+    fig.update_layout(height=520,margin=dict(l=10,r=10,t=30,b=10),xaxis_title='総合RS − 1（×100） → 強い',yaxis_title='総合RSの前週差（×100） → 改善',legend=dict(orientation='h',y=-.22),hovermode='closest')
+    st.plotly_chart(fig,use_container_width=True,key='map_'+key)
+    st.subheader('時間別の強弱')
+    rows=[]
+    # Rank changes use only the common valid universe in both weeks.
+    common=[s for s in available if pd.notna(score[s].iloc[-2])]
+    now_rank=score[common].iloc[-1].rank(ascending=False,method='min')
+    prev_rank=score[common].iloc[-2].rank(ascending=False,method='min')
+    for sym in available:
+        row={'セクター・テーマ':label(sym),'状態':state(latest[sym],delta[sym]),'前週差(pt)':delta[sym],'総合RS':latest[sym]}
+        row.update({f'{p}週RS':periods[p][sym].iloc[-1] for p in PERIODS})
+        row['4週騰落率(%)']=(weekly[sym].iloc[-1]/weekly[sym].iloc[-5]-1)*100
+        row['順位変化']=prev_rank.get(sym,float('nan'))-now_rank.get(sym,float('nan'))
+        row['52週最高終値比(%)']=(weekly[sym].iloc[-1]/weekly[sym].tail(52).max()-1)*100
+        rows.append(row)
+    frame=pd.DataFrame(rows).sort_values('前週差(pt)',ascending=False)
+    rscols=['総合RS']+[f'{p}週RS' for p in PERIODS]
+    def shade(v):
+        return 'background-color:rgba(16,185,129,.22)' if v>=1 else 'background-color:rgba(244,63,94,.18)'
+    st.dataframe(frame.style.map(shade,subset=rscols).format({**{c:'{:.3f}' for c in rscols},'前週差(pt)':'{:+.2f}','4週騰落率(%)':'{:+.2f}','順位変化':'{:+.0f}','52週最高終値比(%)':'{:.1f}'},na_rep='—'),hide_index=True,use_container_width=True,height=min(650,38*len(frame)+40))
+    st.caption('RS 1＝QQQと同じ成績。緑＝上回る／赤＝下回る。順位変化は両週にデータがある同じ対象内で比較（＋は上昇）。')
+    st.subheader('選択したセクターの相対推移')
+    st.caption('26週前＝100にそろえた対QQQ推移。総合RSスコアとは別の指標です。')
+    ratio=weekly[selected].div(weekly['QQQ'],axis=0).tail(27)
+    normalized=ratio.div(ratio.iloc[0])*100
+    chart=go.Figure()
+    for i,sym in enumerate(selected):
+        chart.add_trace(go.Scatter(x=normalized.index,y=normalized[sym],name=label(sym),line=dict(color=COLORS[i%len(COLORS)]),connectgaps=False))
+    chart.add_hline(y=100,line_dash='dot'); chart.update_layout(height=420,margin=dict(l=10,r=10,t=10,b=10),legend=dict(orientation='h',y=-.2),yaxis_title='対QQQ相対推移',hovermode='x unified')
+    st.plotly_chart(chart,use_container_width=True,key='trend_'+key)
+    st.download_button('一覧をCSVで保存',frame.to_csv(index=False).encode('utf-8-sig'),file_name=f'rs_{key}_{price_date:%Y%m%d}.csv',mime='text/csv',key='csv_'+key)
 
-def show_ranking_table(df_rs, category):
-    if not os.path.exists(HISTORY_PATH):
-        st.info('履歴データがまだありません。データ更新後に蓄積されます。')
-        return
-    hist = pd.read_csv(HISTORY_PATH)
-    hist = hist[hist['category'] == category].copy()
-    dates = sorted(hist['date'].unique())
-    if len(dates) < 2:
-        st.info('比較には2週分以上のデータが必要です。来週以降表示されます。')
-        return
-
-    def get_rank(date):
-        d = hist[hist['date']==date].sort_values('rs_total', ascending=False).reset_index(drop=True)
-        d['rank'] = d.index + 1
-        return d.set_index('symbol')[['rank','rs_total','name']]
-
-    r_now   = get_rank(dates[-1])
-    r_prev  = get_rank(dates[-2]) if len(dates) >= 2 else None
-    r_prev2 = get_rank(dates[-3]) if len(dates) >= 3 else None
-
-    rows = []
-    for sym in r_now.index:
-        rank_now = int(r_now.loc[sym,'rank'])
-        rs_now   = r_now.loc[sym,'rs_total']
-        name     = r_now.loc[sym,'name']
-
-        if r_prev is not None and sym in r_prev.index:
-            diff1 = int(r_prev.loc[sym,'rank']) - rank_now
-            w1 = f'↑{diff1}' if diff1 > 0 else (f'↓{abs(diff1)}' if diff1 < 0 else '－')
-            rs_diff = round(rs_now - float(r_prev.loc[sym,'rs_total']), 3)
-        else:
-            w1 = '🆕'
-            rs_diff = None
-
-        if r_prev2 is not None and sym in r_prev2.index:
-            diff2 = int(r_prev2.loc[sym,'rank']) - rank_now
-            w2 = f'↑{diff2}' if diff2 > 0 else (f'↓{abs(diff2)}' if diff2 < 0 else '－')
-        else:
-            w2 = '-'
-
-        rows.append({
-            '順位'     : rank_now,
-            'シンボル'  : sym,
-            '名称'      : name,
-            '総合RS'    : rs_now,
-            '先週比'    : w1,
-            'RS変化'    : rs_diff,
-            '先々週比'  : w2,
-        })
-
-    df_t = pd.DataFrame(rows).sort_values('順位')
-
-    def color_arrow(val):
-        if isinstance(val, str):
-            if '↑' in val: return 'color:#00ff88;font-weight:bold'
-            if '↓' in val: return 'color:#ff6b6b;font-weight:bold'
-            if '🆕' in val: return 'color:#ffd93d;font-weight:bold'
-        return ''
-
-    def color_rsd(val):
-        if isinstance(val, float):
-            if val > 0: return 'color:#00ff88'
-            if val < 0: return 'color:#ff6b6b'
-        return ''
-
-    def color_rs(val):
-        if isinstance(val, float):
-            if val >= 1.10: return 'background-color:#1a6e1a;color:white'
-            elif val >= 1.0: return 'background-color:#4a9e4a;color:white'
-            elif val >= 0.9: return 'background-color:#8B0000;color:white'
-            else: return 'background-color:#5c0000;color:white'
-        return ''
-
-    st.dataframe(
-        df_t.style
-        .map(color_arrow, subset=['先週比','先々週比'])
-        .map(color_rsd,   subset=['RS変化'])
-        .map(color_rs,    subset=['総合RS'])
-        .format({'総合RS': '{:.3f}',
-                 'RS変化': lambda x: f'+{x:.3f}' if isinstance(x,float) and x>0
-                           else (f'{x:.3f}' if isinstance(x,float) else '-')}),
-        use_container_width=True, height=450
-    )
-    st.caption(f'今週: {dates[-1]}  |  先週: {dates[-2] if len(dates)>=2 else "なし"}  |  先々週: {dates[-3] if len(dates)>=3 else "なし"}')
-
-# ============================================================
-#  メイン
-# ============================================================
-if st.button('🔄 データを更新', type='primary', use_container_width=True):
-    st.cache_data.clear()
-
-with st.spinner('データ取得中... (約30秒)'):
-    bm_close, close_all = load_data()
-
-results = []
-for sym, name in SECTOR_ETFS.items():
-    r = calc_rs_row(sym, name, 'セクター', bm_close, close_all)
-    if r: results.append(r)
-for sym, name in THEME_ETFS.items():
-    r = calc_rs_row(sym, name, 'テーマ', bm_close, close_all)
-    if r: results.append(r)
-
-df_rs     = pd.DataFrame(results)
-df_sector = df_rs[df_rs['カテゴリ']=='セクター'].sort_values('総合RS', ascending=False).reset_index(drop=True)
-df_theme  = df_rs[df_rs['カテゴリ']=='テーマ'].sort_values('総合RS', ascending=False).reset_index(drop=True)
-df_sector.index += 1
-df_theme.index  += 1
-
-# 履歴保存
-save_history(df_rs)
-
-cols    = ['シンボル','名称','総合RS','RS_4週','RS_13週','RS_26週','RS_52週','52週高値比%']
-rs_cols = ['総合RS','RS_4週','RS_13週','RS_26週','RS_52週']
-
-def color_rs(val):
-    if isinstance(val, float):
-        if val >= 1.10: return 'background-color:#1a6e1a;color:white'
-        elif val >= 1.0: return 'background-color:#4a9e4a;color:white'
-        elif val >= 0.9: return 'background-color:#8B0000;color:white'
-        else: return 'background-color:#5c0000;color:white'
-    return ''
-
-tab1, tab2, tab3, tab4 = st.tabs([
-    '📊 セクター',
-    '🎯 テーマ',
-    '📈 ランキング推移',
-    '📅 先週比',
-])
-
-with tab1:
-    st.subheader(f'📊 セクター RS ランキング（vs {BENCHMARK}）')
-    st.dataframe(
-        df_sector[cols].style
-        .map(color_rs, subset=rs_cols)
-        .format({c: '{:.3f}' for c in rs_cols} | {'52週高値比%': '{:.1f}%'}),
-        use_container_width=True, height=420
-    )
-    fig1 = draw_chart(SECTOR_ETFS, '📊 セクター', df_sector, bm_close, close_all)
-    st.pyplot(fig1)
-
-with tab2:
-    st.subheader(f'🎯 テーマ RS ランキング（vs {BENCHMARK}）')
-    st.dataframe(
-        df_theme[cols].style
-        .map(color_rs, subset=rs_cols)
-        .format({c: '{:.3f}' for c in rs_cols} | {'52週高値比%': '{:.1f}%'}),
-        use_container_width=True, height=420
-    )
-    fig2 = draw_chart(THEME_ETFS, '🎯 テーマ', df_theme, bm_close, close_all)
-    st.pyplot(fig2)
-
-with tab3:
-    st.subheader('📈 RSランキング推移（順位グラフ）')
-    cat = st.radio('カテゴリ', ['セクター', 'テーマ'], horizontal=True)
-    if os.path.exists(HISTORY_PATH):
-        hist = pd.read_csv(HISTORY_PATH)
-        hist = hist[hist['category'] == cat]
-        dates = sorted(hist['date'].unique())
-        if len(dates) >= 2:
-            pivot = hist.pivot_table(index='date', columns='symbol', values='rs_total')
-            ranks = pivot.rank(axis=1, ascending=False, method='min')
-            top_syms = ranks.iloc[-1].sort_values().head(TOP_N).index.tolist()
-            palette  = ['#00ff88','#ff6b6b','#4ecdc4','#ffd93d','#a29bfe']
-            fig3, ax3 = plt.subplots(figsize=(12, 5), facecolor='#0d1117')
-            ax3.set_facecolor('#0d1117')
-            ax3.tick_params(colors='#aaaaaa', labelsize=9)
-            ax3.grid(True, alpha=0.12, color='#444444')
-            for spine in ax3.spines.values():
-                spine.set_color('#2a2a2a')
-            etf_dict = SECTOR_ETFS if cat == 'セクター' else THEME_ETFS
-            for i, sym in enumerate(top_syms):
-                name  = etf_dict.get(sym, sym)
-                color = palette[i % len(palette)]
-                y = ranks[sym].values
-                x = range(len(ranks.index))
-                ax3.plot(x, y, color=color, linewidth=2.2,
-                         label=f'{sym} {name}', marker='o', markersize=4)
-                ax3.annotate(f'{int(y[-1])}位',
-                             xy=(len(x)-1, y[-1]),
-                             xytext=(5, 0), textcoords='offset points',
-                             color=color, fontsize=9, fontweight='bold')
-            ax3.invert_yaxis()
-            ax3.set_xticks(range(len(ranks.index)))
-            ax3.set_xticklabels([d[5:] for d in ranks.index],
-                                rotation=30, color='#aaaaaa', fontsize=9)
-            ax3.set_ylabel('順位（上が強い）', color='#aaaaaa', fontsize=10)
-            ax3.set_title('RSランキング推移 上位5本',
-                          color='white', fontsize=11, fontweight='bold')
-            ax3.legend(loc='upper left', fontsize=8, facecolor='#1a1a1a',
-                       labelcolor='white', framealpha=0.85, edgecolor='#333333')
-            plt.tight_layout()
-            st.pyplot(fig3)
-        else:
-            st.info('推移グラフは2週分以上のデータが必要です。来週以降表示されます。')
-    else:
-        st.info('履歴データがまだありません。')
-
-with tab4:
-    st.subheader('📅 今週・先週・先々週 ランキング比較')
-    cat2 = st.radio('カテゴリ ', ['セクター', 'テーマ'], horizontal=True)
-    show_ranking_table(df_rs, cat2)
-
-st.caption(f'最終更新: {pd.Timestamp.now().strftime("%Y/%m/%d %H:%M")}  |  データ: yfinance  |  キャッシュ: 1時間')
+for tab,syms,key in zip(st.tabs(['セクター','株式テーマ','コモディティ']),[SECTOR_ETFS,{s:n for s,n in THEME_ETFS.items() if s not in COMMODITIES},{s:ALL[s] for s in ALL if s in COMMODITIES}],['sector','theme','commodity']):
+    with tab: render(syms,key)
+with st.expander('指標の読み方・計算方法'):
+    st.markdown('''- 各期間RS＝ETFの価格倍率 ÷ QQQの価格倍率。配当・分割調整後の価格を使用します。
+- 総合RS＝4・13・26・52週RSの単純平均。元の重みを維持し、丸める前の値で計算します。
+- 前週差＝（今週の総合RS − 前週の総合RS）×100。±0.20pt以内を横ばいとする表示上の基準で、売買シグナルではありません。
+- マップの横軸は（総合RS − 1）×100、縦軸は前週差。独自の強弱マップで、JdK RRG指標ではありません。
+- 確定週足は米国取引カレンダーの週最終取引日終値。暫定は今週の終了済み取引日までを使用し、日中の値は使用しません。
+- 週ラベルは金曜日。祝日週の実際の価格基準日は画面上部に表示します。
+- 53週のいずれかで価格が欠けるETFは除外し、過去価格で穴埋めしません。前週比較ができない場合は「比較データ不足」です。
+- 過去推移は現在の対象ETFと取得した価格履歴から再計算します。当時の対象銘柄や改訂前データの記録ではありません。
+- RSが上がっていてもETF自体が下落している場合があります。4週騰落率を併せて確認してください。RSから資金流入・流出は断定できません。''')
