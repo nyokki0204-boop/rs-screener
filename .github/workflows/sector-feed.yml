@@ -1,5 +1,12 @@
 name: Update sector feed
 on:
+  push:
+    branches: [main]
+    paths:
+      - build_sector_feed.py
+      - metrics.py
+      - requirements.txt
+      - .github/workflows/sector-feed.yml
   schedule:
     - cron: '15 7 * * 2-6'
   workflow_dispatch:
