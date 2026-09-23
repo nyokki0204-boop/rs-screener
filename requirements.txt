@@ -5,3 +5,6 @@ matplotlib
 japanize-matplotlib
 streamlit
 openpyxl
+
+plotly>=5.20
+pandas_market_calendars>=4.4
